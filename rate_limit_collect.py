@@ -38,21 +38,28 @@ def can_pass_slide_window(user, action, time_zone=60, times=30):
     :param time_zone: 限制的时间段内允许多少请求通过
     """
     key = '{}:{}'.format(user, action)
-    now_ts = time.time()
-    value = now_ts # value是什么在这里并不重要，只要保证value的唯一性即可，这里使用毫秒时间戳作为唯一值
-    old_ts = now_ts - time_zone
-    count = redis_conn.zcount(key, old_ts, now_ts)
+    now_ts = time.time() * 1000
+    # value是什么在这里并不重要，只要保证value的唯一性即可，这里使用毫秒时间戳作为唯一值
+    value = now_ts 
+    # 时间窗口左边界
+    old_ts = now_ts - (time_zone * 1000)
+    # 记录行为
+    redis_conn.zadd(key, value, now_ts)
+    # 删除时间窗口之前的数据
+    redis_conn.zremrangebyscore(key, 0, old_ts)
+    # 获取窗口内的行为数量
+    count = redis_conn.zcard(key)
+    # 设置一个过期时间免得占空间
+    redis_conn.expire(key, time_zone + 1)
     if not count or count < times:
-        redis_conn.zadd(key, value, now_ts)
         return True
     return False
 
-# 漏斗/漏桶法，特点是流出速度恒定，流入速度可变
-# 具体步骤：
+# 令牌桶法，具体步骤：
 # 请求来了就计算生成的令牌数，生成的速率有限制
 # 如果生成的令牌太多，则丢弃令牌
 # 有令牌的请求才能通过，否则拒绝
-def can_pass_token_(user, action, time_zone=60, times=30):
+def can_pass_token_bucket(user, action, time_zone=60, times=30):
     """
     :param user: 用户唯一标识
     :param action: 用户访问的接口标识(即用户在客户端进行的动作)
@@ -73,7 +80,7 @@ def can_pass_token_(user, action, time_zone=60, times=30):
         tokens = tokens + tokens # 增加令牌
         if tokens > tokens:
             tokens = capacity
-        last_time = time.time() # 记录流水时间
+        last_time = time.time() # 记录令牌生成时间
         redis_conn.hset(key, 'last_time', last_time)
 
     if tokens >= 1:
@@ -85,6 +92,7 @@ def can_pass_token_(user, action, time_zone=60, times=30):
 # 漏桶算法
 # [go的实现](https://github.com/uber-go/ratelimit)
 # [python的实现](https://github.com/mjpieters/aiolimiter)
+# [整理链接](https://github.com/luengwaiban/rate_limit_collect/blob/master/rate_limit_collect.py)
 
 # 简易版 如下：
 import asyncio
